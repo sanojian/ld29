@@ -7,6 +7,7 @@
 		<script src="//ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
 		<script type="text/javascript" src="./includes/crafty.js"></script>
 
+        <link href='//fonts.googleapis.com/css?family=Press+Start+2P' rel='stylesheet' type='text/css'>
 		<style>
 			body, html { margin:0; padding: 0; overflow:hidden; font-family:Arial; font-size:20px; background: #444444; }
 			#cr-stage { border:2px solid black; margin:5px auto; color:white; }
@@ -33,7 +34,24 @@ var DIRECTIONS = [
     { x: -1, y: 1 }
 ];
 
-var g_game = {};
+var g_game = {
+    curLevel: 0
+};
+
+g_game.levels = [
+    {
+        name: 'Forgotten Door',
+        map: 'intro'
+    },
+    {
+        name: 'Pipe to Freedom',
+        map: 'pipe'
+    },
+    {
+        name: 'On the Run',
+        map: 'test2'
+    }
+];
 
 window.addEventListener("load", function(event) {
 
@@ -65,6 +83,7 @@ function loadMap(strMap) {
         g_game.currentMap = strMap;
 
         Crafty.scene("main"); //when everything is loaded, run the main scene
+        //showContinueText();
         //playSong(data.properties.song);
 
     });
@@ -77,7 +96,7 @@ function initializeCrafty() {
 	    strength: 1,
 
 		Tile: function(x, y, sprite, type) {
-			this.requires('2D, ' + RENDERING_MODE + ', Collision, dirt, ' + sprite)
+			this.requires('2D, ' + RENDERING_MODE + ', Collision, ' + sprite + (type < 4 ? ', dirt' : ''))
                     .collision()
 
             if (type == 4) {    // stone
@@ -151,20 +170,16 @@ function initializeCrafty() {
         },
         moveInDirection: function() {
             var from = { x: this.x, y: this.y };
-            this.attr({ x: this.x + DIRECTIONS[this.direction].x*TILE_SIZE, y: this.y + DIRECTIONS[this.direction].y*TILE_SIZE });
+            this.attr({ x: this.x + DIRECTIONS[this.direction].x*TILE_SIZE/3, y: this.y + DIRECTIONS[this.direction].y*TILE_SIZE/3 });
 
-            var dirt = this.hit('dirt');
-            if (dirt) {
-                this.collideWithTiles(dirt, from);
+            var tiles = this.hit('Tile');
+            if (tiles) {
+                this.collideWithTiles(tiles, from);
             }
 
             // no ground under feet?
-            if (!this.floorCollider.hit('dirt')) {
-                //this.attr({ x: from.x, y: from.y });
-                // falling ?
-                //if (!this.shell1.hit('dirt')) {
+            if (!this.floorCollider.hit('Tile')) {
                 this.attr({ y: this.y + TILE_SIZE });
-                //}
             }
 
         },
@@ -174,7 +189,22 @@ function initializeCrafty() {
                 this.attr({ y: colliding[0].obj.y - this.h });
             }
             else {
-                this.attr({ x: from.x, y: from.y });
+                this.handleObstacle(from);
+            }
+        },
+        changeDirection: function(dir) {
+            this.direction = dir;
+            if (DIRECTIONS[dir].x > 0) {
+                this.unflip();
+            }
+            else {
+                this.flip();
+            }
+            if (DIRECTIONS[dir].x == 0 && DIRECTIONS[dir].y == 0) {
+                this.pauseAnimation().resetAnimation();
+            }
+            else {
+                this.animate('Walk', -1);
             }
         }
 
@@ -201,16 +231,18 @@ function initializeCrafty() {
         range: 12,
 
         Enemy: function (x, y) {
-            this.requires('MOB')
-                    .MOB(x, y, 'enemy')
+            this.requires('MOB, SpriteAnimation')
+                    .MOB(x, y, 'police')
+                    .reel('Walk', 1000*Crafty.timer.FPS()/(12*4), [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [3, 0], [2, 0], [1, 0]])
                     .bind('EnterFrame', function (frameObj) {
-                        if (frameObj.frame % 11 == 0) {
+                        if (frameObj.frame % 4 == 0) {
                             var paths = this.floorCollider.hit('Path');
                             if (paths) {
-                                this.direction = paths[0].obj.direction;
+                                this.changeDirection(paths[0].obj.direction);
                             }
                             this.moveInDirection();
-
+                        }
+                        if (frameObj.frame % 19 == 0) {
                             // look for player
                             var dx = g_game.player.x - this.x;
                             var dy = g_game.player.y - this.y;
@@ -220,7 +252,7 @@ function initializeCrafty() {
                                 var x = Math.cos(angleToTarget)*TILE_SIZE*i;
                                 var y = Math.sin(angleToTarget)*TILE_SIZE*i;
                                 g_game.sighter.attr({ x: this.x + this.w/2 - g_game.sighter.w/2 + x, y: this.y + this.h/2 - g_game.sighter.h/2 + y });
-                                if (g_game.sighter.hit('dirt')) {
+                                if (g_game.sighter.hit('Tile')) {
                                     i = this.range;
                                 }
                                 else if (g_game.sighter.hit('Player')) {
@@ -232,7 +264,7 @@ function initializeCrafty() {
                         }
                     })
 
-            this.direction = 3;
+            this.changeDirection(3);
 
             this.floorCollider = Crafty.e('2D, ' + RENDERING_MODE + ', shell, Collision')
                     .attr({ x: this.x, y: this.y + TILE_SIZE, z: 10 })
@@ -241,6 +273,10 @@ function initializeCrafty() {
 
 
             return this;
+        },
+        handleObstacle: function(from) {
+            this.attr({ x: from.x, y: from.y });
+            this.changeDirection(this.direction == 2 ? 3 : 2);
         }
     });
 
@@ -252,7 +288,7 @@ function initializeCrafty() {
                 .reel('Walk', 1000*Crafty.timer.FPS()/(12*4), [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [3, 0], [2, 0], [1, 0]])
                 //.reel('Walk', 600, 0, 0, 5)
                 .bind('EnterFrame', function(frameObj) {
-                    if (frameObj.frame % 12 == 0) {
+                    if (frameObj.frame % 4 == 0) {
                         var tiles = this['shell' + this.direction].hit('dirt');
                         if (tiles) {
                             if (Math.random() < 0.7) {
@@ -263,14 +299,13 @@ function initializeCrafty() {
                         }
                         else {
                             this.moveInDirection();
+                            if (this.hit('exit')) {
+                                this.destroy();
+                                g_game.curLevel = Math.min(g_game.levels.length - 1, g_game.curLevel + 1);
+                                Crafty.scene('splash');
+                            }
                         }
                     }
-                    /*else if (frameObj.frame % 3 == 0) {
-                        // gravity
-                        if (!this.shell1.hit('dirt')) {
-                            this.attr({ y: this.y + 8 });
-                        }
-                    }*/
                 })
 
             for (var i=0;i<DIRECTIONS.length;i++){
@@ -296,23 +331,14 @@ function initializeCrafty() {
                         z: 30
                     })
                     .bind('MouseDown', function(evt) {
-                        self.direction = this.direction;
-                        if (DIRECTIONS[dir].x == 0 && DIRECTIONS[dir].y == 0) {
-                            self.pauseAnimation().resetAnimation();
-                        }
-                        else {
-                            if (DIRECTIONS[dir].x > 0) {
-                                self.unflip();
-                            }
-                            else {
-                                self.flip();
-                            }
-                            self.animate('Walk', -1);
-                        }
+                        self.changeDirection(this.direction);
                     });
 
             this.attach(dirChooser);
 
+        },
+        handleObstacle: function(from) {
+            this.attr({ x: from.x, y: from.y });
         }
     });
 
@@ -330,6 +356,14 @@ function initializeCrafty() {
                     if (obj.type == 'Path') {
                         var path = Crafty.e('Path').Path(obj.x, obj.y, obj.width, obj.height, obj.properties.dir);
                     }
+                    else if (obj.type == 'Exit') {
+                        Crafty.e('2D, ' + RENDERING_MODE + ', exit, Collision')
+                                .attr({ x: obj.x, y: obj.y - TILE_SIZE*3, z: 15})
+                                .collision();
+                    }
+                    else if (obj.type == 'Player') {
+                        g_game.player = Crafty.e('Player').Player(obj.x, obj.y - TILE_SIZE*3);
+                    }
                     else if (obj.type == 'Enemy') {
                         var enemy = Crafty.e('Enemy').Enemy(obj.x, obj.y - TILE_SIZE*3);
                     }
@@ -345,7 +379,7 @@ function initializeCrafty() {
             }
         }
 
-        g_game.player = Crafty.e('Player').Player(7, 0);
+        // for line of sight
         g_game.sighter = Crafty.e('2D, ' + RENDERING_MODE + ', sighter, Collision').collision().attr({ z: 100 });
 
 
@@ -361,24 +395,57 @@ function initializeCrafty() {
             });
 
             Crafty.sprite(TILE_SIZE*3, './images/units.png', {
-                enemy: [1, 0]
+                enemy: [1, 0],
+                exit: [2, 0]
             });
 
             Crafty.sprite(TILE_SIZE*3, './images/player.png', {
                 player: [0, 0]
             });
 
+            Crafty.sprite(TILE_SIZE*3, './images/police.png', {
+                police: [0, 0]
+            });
+
             Crafty.sprite(TILE_SIZE*3, './images/shell.png', {
                 shell: [0, 0]
             });
 
-			//Crafty.scene("main");
-            loadMap('test2');
+            g_game.curLevel = 0;
+            Crafty.scene("splash");
 		});
 		
 
 	});
-	
+
+    Crafty.scene("splash", function () {
+        Crafty.background("#000");
+
+        Crafty.e('2D, ' + RENDERING_MODE + ', Text').attr({ w: VIEW_WIDTH, x: 0, y: 64, z: 1000 })
+                .text("Stage " + (parseInt(g_game.curLevel, 10) + 1))
+                .textColor('#9D9D9D', 1)
+                .textFont({ size: "16pt", weight: 'bold', family: GAME_FONT })
+                .css({ 'text-align': 'center'})
+
+        Crafty.e('2D, ' + RENDERING_MODE + ', Text').attr({ w: VIEW_WIDTH, x: 0, y: 96, z: 1000 })
+                .text(g_game.levels[g_game.curLevel].name)
+                .textColor('#9D9D9D', 1)
+                .textFont({ size: "24pt", weight: 'bold', family: GAME_FONT })
+                .css({ 'text-align': 'center'})
+
+
+        g_game.loadingText = Crafty.e('2D, ' + RENDERING_MODE + ', Text').attr({ w: VIEW_WIDTH, x: 0, y: VIEW_HEIGHT-160, z: 1000 })
+                .text('Loading...')
+                .textColor('#9D9D9D', 1)
+                .textFont({ size: "24pt", weight: 'bold', family: GAME_FONT })
+                .css({ 'text-align': 'center'})
+
+        loadMap(g_game.levels[g_game.curLevel].map);
+
+        //playSong(GAME.DUNGEONLEVELS[g_game.curLevel].song);
+
+    });
+
 	Crafty.scene("loading");
 
 }

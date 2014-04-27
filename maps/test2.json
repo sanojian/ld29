@@ -54,6 +54,34 @@
                  "width":11,
                  "x":927,
                  "y":276
+                }, 
+                {
+                 "gid":9,
+                 "height":0,
+                 "name":"",
+                 "properties":
+                    {
+
+                    },
+                 "type":"Player",
+                 "visible":true,
+                 "width":0,
+                 "x":216,
+                 "y":297
+                }, 
+                {
+                 "gid":11,
+                 "height":0,
+                 "name":"",
+                 "properties":
+                    {
+
+                    },
+                 "type":"Exit",
+                 "visible":true,
+                 "width":0,
+                 "x":918,
+                 "y":297
                 }],
          "opacity":1,
          "type":"objectgroup",
