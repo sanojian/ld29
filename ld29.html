@@ -18,9 +18,22 @@
 
 var RENDERING_MODE = 'DOM';//'Canvas';
 var GAME_FONT = '"Press Start 2P", cursive';
-var VIEW_WIDTH = 640;
+var VIEW_WIDTH = 960;
 var VIEW_HEIGHT = 480;
-var TILE_WIDTH = 8;
+var TILE_SIZE = 9;
+
+var DIRECTIONS = [
+    { x: 0, y: 0 },
+    { x: 0, y: 1 },
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 1, y: 1 },
+    { x: 1, y: -1 },
+    { x: -1, y: -1 },
+    { x: -1, y: 1 }
+];
+
+var g_game = {};
 
 window.addEventListener("load", function(event) {
 
@@ -32,43 +45,310 @@ window.addEventListener("load", function(event) {
 
 });
 
+function loadMap(strMap) {
+
+    $.getJSON('./maps/' + strMap + '.json?' + Math.random(), function(data) {
+
+        for (var i=0;i<data.tilesets.length;i++) {
+            var myMap = new Object();
+            var width = data.tilesets[i].imagewidth / data.tilesets[i].tilewidth;
+            var height = data.tilesets[i].imageheight / data.tilesets[i].tileheight;
+
+            for (var y=0;y<height;y++)
+                for (var x=0;x<width;x++)
+                    myMap['maptile_' + (data.tilesets[i].firstgid + y*width+x)] = [x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE];
+
+            Crafty.sprite(1, './maps/' + data.tilesets[i].image, myMap);
+        }
+
+        g_game.map = data;
+        g_game.currentMap = strMap;
+
+        Crafty.scene("main"); //when everything is loaded, run the main scene
+        //playSong(data.properties.song);
+
+    });
+
+}
+
 function initializeCrafty() {
 
 	Crafty.c('Tile', {
-	
-		Tile: function(x, y) {
-			this.requires('2D, ' + RENDERING_MODE + ', dirt1'))
-		
-			this.locX = x,
+	    strength: 1,
+
+		Tile: function(x, y, sprite, type) {
+			this.requires('2D, ' + RENDERING_MODE + ', Collision, dirt, ' + sprite)
+                    .collision()
+
+            if (type == 4) {    // stone
+                this.strength = 100;
+            }
+
+			this.locX = x;
 			this.locY = y;
 
 			this.attr({ x: x*this.w, y: y*this.h, z: 10 });
 			
 			return this;
-		}
+		},
+        takeDamage: function(amt) {
+            this.strength -= amt;
+            if (this.strength <= 0) {
+                this.destroy();
+            }
+        }
 	});
+
+    Crafty.c('DirectionChooser', {
+        direction: 0,
+
+        DirectionChooser: function (dir) {
+            this.requires('2D, ' + RENDERING_MODE + ', Color, Mouse')
+                    .attr({ w: TILE_SIZE*(dir == 0 ? 3 : 9), h: TILE_SIZE*(dir == 0 ? 3 : 9), alpha: 0.0 })
+                    .color('#555555')
+                    .css({ cursor: 'pointer' })
+
+            if (dir == 0) {
+                this.css({ cursor: 'move'});
+            }
+            else if (dir == 1) {
+                this.css({ cursor: 's-resize'});
+            }
+            else if (dir == 2) {
+                this.css({ cursor: 'e-resize'});
+            }
+            else if (dir == 3) {
+                this.css({ cursor: 'w-resize'});
+            }
+            else if (dir == 4) {
+                this.css({ cursor: 'se-resize'});
+            }
+            else if (dir == 5) {
+                this.css({ cursor: 'ne-resize'});
+            }
+            else if (dir == 6) {
+                this.css({ cursor: 'nw-resize'});
+            }
+            else if (dir == 7) {
+                this.css({ cursor: 'sw-resize'});
+            }
+
+            this.direction = dir;
+
+            return this;
+        }
+    });
+
+    Crafty.c('MOB', {
+        direction: 0,
+        MOB: function (x, y, type) {
+            this.requires('2D, ' + RENDERING_MODE + ', Collision, ' + type)
+                    .collision()
+
+            this.attr({ x: x, y: y, z: 20 });
+
+            return this;
+        },
+        moveInDirection: function() {
+            var from = { x: this.x, y: this.y };
+            this.attr({ x: this.x + DIRECTIONS[this.direction].x*TILE_SIZE, y: this.y + DIRECTIONS[this.direction].y*TILE_SIZE });
+
+            var dirt = this.hit('dirt');
+            if (dirt) {
+                this.collideWithTiles(dirt, from);
+            }
+
+            // no ground under feet?
+            if (!this.floorCollider.hit('dirt')) {
+                //this.attr({ x: from.x, y: from.y });
+                // falling ?
+                //if (!this.shell1.hit('dirt')) {
+                this.attr({ y: this.y + TILE_SIZE });
+                //}
+            }
+
+        },
+        collideWithTiles: function(colliding, from) {
+            if (colliding.length == 1) {
+                // climb it
+                this.attr({ y: colliding[0].obj.y - this.h });
+            }
+            else {
+                this.attr({ x: from.x, y: from.y });
+            }
+        }
+
+
+    });
+
+    Crafty.c('Path', {
+        direction: 4,
+
+        Path: function (x, y, w, h, dir) {
+            this.requires('2D, ' + RENDERING_MODE + ', Collision, Color')
+                    .color('#555555')
+                    .attr({ x: x, y: y, w: w, h: h, z: 1 })
+                    .collision()
+
+            this.direction = dir;
+
+            return this;
+        }
+    });
+
+
+    Crafty.c('Enemy', {
+        range: 12,
+
+        Enemy: function (x, y) {
+            this.requires('MOB')
+                    .MOB(x, y, 'enemy')
+                    .bind('EnterFrame', function (frameObj) {
+                        if (frameObj.frame % 11 == 0) {
+                            var paths = this.floorCollider.hit('Path');
+                            if (paths) {
+                                this.direction = paths[0].obj.direction;
+                            }
+                            this.moveInDirection();
+
+                            // look for player
+                            var dx = g_game.player.x - this.x;
+                            var dy = g_game.player.y - this.y;
+                            var dist = Math.sqrt(Math.pow(dx, 2) + Math.pow(dy, 2));
+                            var angleToTarget = Math.atan2(dy, dx);
+                            for (var i=3;i<this.range;i++) {
+                                var x = Math.cos(angleToTarget)*TILE_SIZE*i;
+                                var y = Math.sin(angleToTarget)*TILE_SIZE*i;
+                                g_game.sighter.attr({ x: this.x + this.w/2 - g_game.sighter.w/2 + x, y: this.y + this.h/2 - g_game.sighter.h/2 + y });
+                                if (g_game.sighter.hit('dirt')) {
+                                    i = this.range;
+                                }
+                                else if (g_game.sighter.hit('Player')) {
+                                    g_game.player.destroy();
+                                    console.log('bang');
+                                }
+                            }
+
+                        }
+                    })
+
+            this.direction = 3;
+
+            this.floorCollider = Crafty.e('2D, ' + RENDERING_MODE + ', shell, Collision')
+                    .attr({ x: this.x, y: this.y + TILE_SIZE, z: 10 })
+                    .collision()
+            this.attach(this.floorCollider);
+
+
+            return this;
+        }
+    });
+
+    Crafty.c('Player', {
+
+        Player: function(x, y) {
+            this.requires('MOB, SpriteAnimation')
+                .MOB(x, y, 'player')
+                .reel('Walk', 1000*Crafty.timer.FPS()/(12*4), [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [3, 0], [2, 0], [1, 0]])
+                //.reel('Walk', 600, 0, 0, 5)
+                .bind('EnterFrame', function(frameObj) {
+                    if (frameObj.frame % 12 == 0) {
+                        var tiles = this['shell' + this.direction].hit('dirt');
+                        if (tiles) {
+                            if (Math.random() < 0.7) {
+                                for (var i=0;i<tiles.length;i++) {
+                                    tiles[i].obj.takeDamage(1);
+                                }
+                            }
+                        }
+                        else {
+                            this.moveInDirection();
+                        }
+                    }
+                    /*else if (frameObj.frame % 3 == 0) {
+                        // gravity
+                        if (!this.shell1.hit('dirt')) {
+                            this.attr({ y: this.y + 8 });
+                        }
+                    }*/
+                })
+
+            for (var i=0;i<DIRECTIONS.length;i++){
+                this.createDirection(i);
+            }
+
+            this.floorCollider = this.shell1;
+
+
+            return this;
+        },
+        createDirection: function(dir) {
+            this['shell' + dir] = Crafty.e('2D, ' + RENDERING_MODE + ', shell, Collision')
+                    .attr({ x: this.x + DIRECTIONS[dir].x*TILE_SIZE, y: this.y + DIRECTIONS[dir].y*TILE_SIZE, z: 10 })
+                    .collision()
+            this.attach(this['shell' + dir]);
+
+            var self = this;
+            var dirChooser = Crafty.e('DirectionChooser').DirectionChooser(dir);
+            dirChooser.attr({
+                        x: this.x + DIRECTIONS[dir].x*(DIRECTIONS[dir].x < 0 ? dirChooser.w : this.w),
+                        y: this.y + DIRECTIONS[dir].y*(DIRECTIONS[dir].y < 0 ? dirChooser.h : this.h),
+                        z: 30
+                    })
+                    .bind('MouseDown', function(evt) {
+                        self.direction = this.direction;
+                        if (DIRECTIONS[dir].x == 0 && DIRECTIONS[dir].y == 0) {
+                            self.pauseAnimation().resetAnimation();
+                        }
+                        else {
+                            if (DIRECTIONS[dir].x > 0) {
+                                self.unflip();
+                            }
+                            else {
+                                self.flip();
+                            }
+                            self.animate('Walk', -1);
+                        }
+                    });
+
+            this.attach(dirChooser);
+
+        }
+    });
 
 
 	Crafty.scene("main", function () {
 		Crafty.background("#000");
 		
 		g_game.tiles = [];
-		
-		for (var y=0;y<8;y++) {
-			g_game.tiles[y] = [];
-			for (var x=0;x<14;x++) {
-				var tile = Crafty.e('Tile').Tile(x, y);
-				g_game.tiles[y][x] = tile;
-			}
-		}
-		
-		g_game.player = Crafty.e('Player').Player();
-		g_game.player.moveTo(4, 4);
-		
-		var enemy = Crafty.e('Enemy').Enemy();
-		enemy.moveTo(6, 6);
-		
-		
+        var startY = 20;
+
+        for (var i=0;i<g_game.map.layers.length;i++) {
+            if (g_game.map.layers[i].type == 'objectgroup') {
+                for (var j=0;j<g_game.map.layers[i].objects.length;j++) {
+                    var obj = g_game.map.layers[i].objects[j];
+                    if (obj.type == 'Path') {
+                        var path = Crafty.e('Path').Path(obj.x, obj.y, obj.width, obj.height, obj.properties.dir);
+                    }
+                    else if (obj.type == 'Enemy') {
+                        var enemy = Crafty.e('Enemy').Enemy(obj.x, obj.y - TILE_SIZE*3);
+                    }
+                }
+            }
+            else {
+                for (var y = 0; y < g_game.map.layers[i].height; y++) {
+                    for (var x = 0; x < g_game.map.layers[i].width; x++) {
+                        var tile = g_game.map.layers[i].data[x + y * g_game.map.layers[i].width];
+                        Crafty.e('Tile').Tile(x, y, 'maptile_' + g_game.map.layers[i].data[x + y * g_game.map.layers[i].width], tile);
+                    }
+                }
+            }
+        }
+
+        g_game.player = Crafty.e('Player').Player(7, 0);
+        g_game.sighter = Crafty.e('2D, ' + RENDERING_MODE + ', sighter, Collision').collision().attr({ z: 100 });
+
+
 	});
 		
 	Crafty.scene("loading", function () {
@@ -76,14 +356,24 @@ function initializeCrafty() {
 
 		Crafty.load(['./images/tiles.png'], function() {
 
-			Crafty.sprite(8, './images/tiles.png', {
-				enemy: [0, 0],
-				player: [1, 0],
-				dirt1: [0, 0],
-				dirt2: [1, 0]
-			})
-			
-			Crafty.scene("main");
+            Crafty.sprite(TILE_SIZE, './images/tiles.png', {
+                sighter: [2, 0]
+            });
+
+            Crafty.sprite(TILE_SIZE*3, './images/units.png', {
+                enemy: [1, 0]
+            });
+
+            Crafty.sprite(TILE_SIZE*3, './images/player.png', {
+                player: [0, 0]
+            });
+
+            Crafty.sprite(TILE_SIZE*3, './images/shell.png', {
+                shell: [0, 0]
+            });
+
+			//Crafty.scene("main");
+            loadMap('test2');
 		});
 		
 
